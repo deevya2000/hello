@@ -1,0 +1,76 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: maven-pipeline
+spec:
+  params:
+    - name: application-git-url
+      type: string
+    - default: main
+      name: application-git-revision
+      type: string
+    - default: application-source
+      name: application-folder-name
+      type: string
+    - default: .
+      name: dockerfile-path
+      type: string
+    - name: application-name
+      type: string
+    - name: image-name
+      type: string
+  tasks:
+    - name: application-git-clone
+      params:
+        - name: url
+          value: $(params.application-git-url)
+        - name: revision
+          value: $(params.application-git-revision)
+        - name: subdirectory
+          value: $(params.application-folder-name)
+      taskRef:
+        kind: ClusterTask
+        name: git-clone
+      workspaces:
+        - name: output
+          workspace: source
+    - name: build-application-image
+      params:
+        - name: GOALS
+          value:
+            - '-DskipTests'
+            - clean
+            - package
+        - name: IMAGE
+          value: '$(params.image-name)":"$(tasks.application-git-clone.results.commit)'
+        - name: CONTEXT
+          value: $(params.application-folder-name)
+        - name: DOCKERFILE
+          value: $(params.dockerfile-path)
+        - name: TLSVERIFY
+          value: 'false'
+      runAfter:
+        - application-git-clone
+      taskRef:
+        kind: Task
+        name: build-maven-image
+      workspaces:
+        - name: source
+          workspace: source
+    - name: deploy-kn-service
+      params:
+        - name: ARGS
+          value:
+            - service
+            - create
+            - $(params.application-name)
+            - '--force'
+            - >-
+              --image=$(params.image-name)@$(tasks.build-application-image.results.IMAGE_DIGEST)
+      runAfter:
+        - build-application-image
+      taskRef:
+        kind: ClusterTask
+        name: kn
+  workspaces:
+    - name: source
